@@ -1,4 +1,7 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 require __DIR__ . '/vendor/autoload.php';
 
 use GraphQL\Type\Definition\Type;
@@ -10,7 +13,7 @@ use GraphQL\GraphQL;
 $pdo = new PDO('mysql:host=db;dbname=myapp;charset=utf8mb4', 'user', 'secret');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-// Typdefinition
+// Typ: User
 $userType = new ObjectType([
     'name' => 'User',
     'fields' => [
@@ -18,6 +21,17 @@ $userType = new ObjectType([
         'fname' => Type::string(),
         'lname' => Type::string(),
         'description' => Type::string(),
+    ],
+]);
+
+// Typ: Adress
+$adressType = new ObjectType([
+    'name' => 'Adress',
+    'fields' => [
+        'id' => Type::nonNull(Type::id()),
+        'street' => Type::string(),
+        'postcode' => Type::string(),
+        'city' => Type::string(),
     ],
 ]);
 
@@ -41,6 +55,18 @@ $queryType = new ObjectType([
                 return $stmt->fetchAll(PDO::FETCH_ASSOC);
             },
         ],
+        'allAdresses' => [
+    'type' => Type::listOf($adressType),
+    'resolve' => function () use ($pdo) {
+        try {
+            $stmt = $pdo->query('SELECT id, street, postcode, city FROM adress');
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            file_put_contents('debug_adress_error.txt', $e->getMessage());
+            return null;
+        }
+    },
+],
     ],
 ]);
 
@@ -68,10 +94,30 @@ $mutationType = new ObjectType([
                 return $stmt->fetch(PDO::FETCH_ASSOC);
             },
         ],
+        'createAdress' => [
+            'type' => $adressType,
+            'args' => [
+                'street' => Type::nonNull(Type::string()),
+                'postcode' => Type::nonNull(Type::string()),
+                'city' => Type::nonNull(Type::string()),
+            ],
+            'resolve' => function ($root, $args) use ($pdo) {
+                $stmt = $pdo->prepare('INSERT INTO adress (street, postcode, city) VALUES (?, ?, ?)');
+                $stmt->execute([
+                    $args['street'],
+                    $args['postcode'],
+                    $args['city'],
+                ]);
+                $id = $pdo->lastInsertId();
+                $stmt = $pdo->prepare('SELECT id, street, postcode, city FROM adress WHERE id = ?');
+                $stmt->execute([$id]);
+                return $stmt->fetch(PDO::FETCH_ASSOC);
+            },
+        ],
     ],
 ]);
 
-// Visa GraphiQL i browsern vid GET
+// Visa GraphiQL i webbläsaren
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     ?>
     <!DOCTYPE html>
@@ -117,8 +163,13 @@ try {
 
     $result = GraphQL::executeQuery($schema, $query, null, null, $variableValues);
     $output = $result->toArray();
-} catch (\Exception $e) {
-    $output = ['errors' => [['message' => $e->getMessage()]]];
+} catch (\Throwable $e) {
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'errors' => [['message' => $e->getMessage(), 'stack' => $e->getTraceAsString()]]
+    ]);
+    exit;
 }
 
 header('Content-Type: application/json');
